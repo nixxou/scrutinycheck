@@ -1,0 +1,6 @@
+{
+ "what": "a drive spare threshold of -1 means no threshold (the fork's sentinel); found by mutfuzz",
+ "error": false,
+ "device_status": 1,
+ "bits": {}
+}

@@ -14,6 +14,9 @@ Ported material, all under `webapp/backend/pkg/` in the fork:
 | ------------------------------ | ---------------------------------------------------------------------------- |
 | `src/rules/ata_thresholds.rs`  | `thresholds/ata_attribute_metadata.go` (attribute table, buckets, transforms) |
 | `src/rules/ata.rs`             | `models/measurements/smart_ata_attribute.go`, `models/measurements/smart.go` |
+| `src/rules/devstat_thresholds.rs` | `thresholds/ata_attribute_metadata.go` (`AtaDeviceStatsMetadata` table) |
+| `src/rules/devstat.rs`         | `models/measurements/smart_ata_devstat_attribute.go`, `models/measurements/smart.go` |
+| `src/rules/farm.rs`            | `thresholds/farm_attribute_metadata.go`, `models/measurements/smart_farm_attribute.go`, `models/measurements/smart.go`, `models/collector/farm.go` |
 | `src/rules/nvme.rs`            | `thresholds/nvme_attribute_metadata.go`, `models/measurements/smart_nvme_attribute.go`, `models/measurements/smart.go` |
 | `src/rules/scsi.rs`            | `thresholds/scsi_attribute_metadata.go`, `models/measurements/smart_scsci_attribute.go`, `models/measurements/smart.go`, `models/collector/smart.go` |
 | `src/rules/mod.rs`             | `constants.go` (status bits), `models/measurements/smart.go` (dispatch)      |

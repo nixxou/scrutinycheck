@@ -88,6 +88,91 @@ fn fixed_mismatch_classes_stay_fixed() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Apply `oracle/mutfuzz.py` edit operations: ["set", path, v], ["del", path], ["ins", path, v].
+fn apply_ops(doc: &mut serde_json::Value, ops: &[serde_json::Value]) {
+    use serde_json::Value;
+    for op in ops {
+        let op = op.as_array().expect("op is an array");
+        let kind = op[0].as_str().unwrap();
+        let path = op[1].as_array().unwrap();
+        if path.is_empty() {
+            if kind == "set" {
+                *doc = op[2].clone();
+            }
+            continue;
+        }
+        let mut parent = &mut *doc;
+        for step in &path[..path.len() - 1] {
+            parent = match step {
+                Value::String(k) => parent.get_mut(k.as_str()).expect("path key"),
+                Value::Number(i) => parent.get_mut(i.as_u64().unwrap() as usize).expect("path index"),
+                _ => panic!("bad path step {step}"),
+            };
+        }
+        let last = &path[path.len() - 1];
+        match (kind, last, parent) {
+            ("set", Value::String(k), Value::Object(m)) => {
+                m.insert(k.clone(), op[2].clone());
+            }
+            ("set", Value::Number(i), Value::Array(a)) => a[i.as_u64().unwrap() as usize] = op[2].clone(),
+            ("del", Value::String(k), Value::Object(m)) => {
+                m.remove(k.as_str());
+            }
+            ("del", Value::Number(i), Value::Array(a)) => {
+                a.remove(i.as_u64().unwrap() as usize);
+            }
+            ("ins", Value::Number(i), Value::Array(a)) => a.insert(i.as_u64().unwrap() as usize, op[2].clone()),
+            (k, step, _) => panic!("cannot apply {k} at {step}"),
+        }
+    }
+}
+
+fn read_gz(path: &Path) -> String {
+    use std::io::Read;
+    let mut s = String::new();
+    flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap())
+        .read_to_string(&mut s)
+        .unwrap();
+    s
+}
+
+/// `tests/virtual/corpus/`: tens of thousands of drives produced by the feedback-driven
+/// mutation fuzzer (`oracle/mutfuzz.py --corpus N`), stored as base documents plus edit
+/// operations, with Scrutiny's verdict recorded per case.
+#[test]
+fn mutation_corpus_matches_scrutiny() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/virtual/corpus");
+    let bases: Vec<serde_json::Value> = serde_json::from_str(&read_gz(&dir.join("bases.json.gz"))).unwrap();
+    let cases = read_gz(&dir.join("cases.jsonl.gz"));
+    let mut failures = Vec::new();
+    let mut per_type: BTreeMap<String, usize> = BTreeMap::new();
+    let mut n = 0;
+    for (i, line) in cases.lines().enumerate() {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        let mut doc = bases[v["b"].as_u64().unwrap() as usize].clone();
+        apply_ops(&mut doc, v["ops"].as_array().unwrap());
+        let exp = Expected {
+            error: v.get("e").is_some(),
+            device_status: v.get("d").and_then(|d| d.as_u64()).unwrap_or(0) as u8,
+            bits: v.get("x").map(|x| serde_json::from_value(x.clone()).unwrap()).unwrap_or_default(),
+        };
+        if let Some(p) = check(&doc.to_string(), &exp) {
+            failures.push(format!("case {} ({}): {p}", i + 1, v["t"]));
+        }
+        *per_type.entry(v["t"].as_str().unwrap_or("?").to_string()).or_default() += 1;
+        n += 1;
+    }
+    assert!(n >= 50_000, "corpus too small: {n}");
+    let focus: usize = ["sata-hdd", "sata-ssd", "nvme"].iter().map(|t| per_type.get(*t).copied().unwrap_or(0)).sum();
+    assert!(focus * 100 >= n * 80, "SATA/NVMe share below 80%: {per_type:?}");
+    assert!(
+        failures.is_empty(),
+        "{} of {n} cases differ (first 20):\n{}",
+        failures.len(),
+        failures.iter().take(20).cloned().collect::<Vec<_>>().join("\n")
+    );
+}
+
 #[test]
 fn generated_corpus_matches_scrutiny() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/virtual/corpus.jsonl");

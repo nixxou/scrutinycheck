@@ -49,6 +49,8 @@ CASES = {
         {"device": {"protocol": "ATA"}, "smart_status": {"passed": True}, "ata_smart_attributes": {"table": None}}),
     "negative-capacity": ("negative user_capacity.bytes is decoded (int64), not rejected",
         {"device": {"protocol": "ATA"}, "smart_status": {"passed": True}, "user_capacity": {"bytes": -1}}),
+    "nvme-spare-threshold-minus-one": ("a drive spare threshold of -1 means no threshold (the fork's sentinel); found by mutfuzz",
+        {"device": {"protocol": "NVMe"}, "nvme_smart_health_information_log": {"available_spare": -50, "available_spare_threshold": -1}}),
     "protocol-case": ("protocol is matched case-sensitively",
         {"device": {"protocol": "ata"}, "smart_status": {"passed": True},
          "ata_smart_attributes": {"table": [{"id": 5, "raw": {"value": 387}}]}}),
@@ -70,7 +72,7 @@ def main():
             "what": what,
             "error": bool(g.get("error")),
             "device_status": g["device_status"],
-            "bits": {k: v["status"] & ~8 for k, v in g["attributes"].items() if v["status"] & ~8},
+            "bits": {k: v["status"] for k, v in g["attributes"].items() if v["status"]},
         }
         with open(os.path.join(OUT, name + ".json"), "w", encoding="utf-8", newline="\n") as f:
             json.dump(doc, f, indent=1)

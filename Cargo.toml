@@ -12,3 +12,6 @@ anyhow = "1.0.105"
 clap = { version = "4.6.10", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+
+[dev-dependencies]
+flate2 = "1.1.11"

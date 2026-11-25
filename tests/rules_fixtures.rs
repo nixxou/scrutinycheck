@@ -113,8 +113,8 @@ const CASES: &[Case] = &[
         file: "smart-ata-full.json",
         status: Status::Pass,
         findings: &[],
-        oracle: "characterization; TestFromCollectorSmartInfo_ATA_DeviceStatistics only checks the device \
-                 statistics, which are not ported",
+        oracle: "TestFromCollectorSmartInfo_ATA_DeviceStatistics: devstat_7_8 (percentage used) is 19; the \
+                 device status is not asserted there, the oracle binary gives DeviceStatusPassed",
     },
     Case {
         file: "smart-megaraid0.json",
@@ -144,9 +144,10 @@ const CASES: &[Case] = &[
     },
     Case {
         file: "smart-ata-farm.json",
-        status: Status::Unknown,
-        findings: &[("smart", Source::NoData, Status::Unknown)],
-        oracle: "characterization (`smartctl -l farm`: only the Seagate FARM log, which is not ported)",
+        status: Status::Pass,
+        findings: &[],
+        oracle: "characterization (`smartctl -l farm`: only the Seagate FARM log, every error count at 0; \
+                 no `smart_status`, which strict mode does not hold against the drive)",
     },
     Case {
         file: "scan-simple.json",

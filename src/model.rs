@@ -36,6 +36,12 @@ pub struct SmartctlOutput {
     pub temperature: Option<Temperature>,
     #[serde(default)]
     pub ata_smart_attributes: Option<AtaSmartAttributes>,
+    /// ATA Device Statistics (GP log 0x04).
+    #[serde(default)]
+    pub ata_device_statistics: Option<AtaDeviceStatistics>,
+    /// Seagate FARM (Field Accessible Reliability Metrics) log, `smartctl -l farm`.
+    #[serde(default)]
+    pub seagate_farm_log: Option<SeagateFarmLog>,
     #[serde(default)]
     pub nvme_smart_health_information_log: Option<NvmeHealthLog>,
     #[serde(default)]
@@ -148,6 +154,109 @@ pub struct AtaRaw {
     pub value: Option<i64>,
     #[serde(default)]
     pub string: Option<String>,
+}
+
+/// `ata_device_statistics`. Like the fork's collector model, absent or `null` fields read
+/// as Go zero values: no page, page number 0, offset 0, value 0, `valid == false`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct AtaDeviceStatistics {
+    #[serde(default, deserialize_with = "null_items_as_default")]
+    pub pages: Vec<AtaDeviceStatisticsPage>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct AtaDeviceStatisticsPage {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub number: i64,
+    #[serde(default, deserialize_with = "null_items_as_default")]
+    pub table: Vec<AtaDeviceStatistic>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct AtaDeviceStatistic {
+    /// Byte offset of the statistic in its page; with the page number it identifies it.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub offset: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub value: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub flags: AtaDeviceStatisticFlags,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct AtaDeviceStatisticFlags {
+    /// The drive supports the statistic and its value is meaningful.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub valid: bool,
+}
+
+/// `seagate_farm_log`: the pages the fork evaluates. A page that is absent or `null` is
+/// `None` (a nil pointer in the fork); inside a page, absent or `null` counters read as 0.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct SeagateFarmLog {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub supported: bool,
+    #[serde(default)]
+    pub page_1_drive_information: Option<FarmDriveInformation>,
+    #[serde(default)]
+    pub page_2_workload_statistics: Option<FarmWorkloadStatistics>,
+    #[serde(default)]
+    pub page_3_error_statistics: Option<FarmErrorStatistics>,
+    #[serde(default)]
+    pub page_4_environment_statistics: Option<FarmEnvironmentStatistics>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct FarmDriveInformation {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub poh: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub spoh: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub head_flight_hours: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub head_load_events: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub power_cycle_count: i64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct FarmWorkloadStatistics {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub total_read_commands: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub total_write_commands: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub logical_sectors_written: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub logical_sectors_read: i64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct FarmErrorStatistics {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub number_of_unrecoverable_read_errors: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub number_of_unrecoverable_write_errors: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub number_of_reallocated_sectors: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub number_of_reallocated_candidate_sectors: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub total_crc_errors: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub command_time_out_count_total: i64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct FarmEnvironmentStatistics {
+    /// smartctl spells the key this way.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub curent_temp: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub highest_temp: i64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub lowest_temp: i64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -267,4 +376,18 @@ where
     T: Default + Deserialize<'de>,
 {
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// [`null_as_default`] for a list and for each of its elements: in Go a `null` slice is
+/// empty and a `null` element is a zero-valued struct.
+fn null_items_as_default<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<Vec<Option<T>>>::deserialize(deserializer)?
+        .unwrap_or_default()
+        .into_iter()
+        .map(Option::unwrap_or_default)
+        .collect())
 }

@@ -475,9 +475,10 @@ def encode(doc):
 
 # --------------------------------------------------------------------------- compare
 
-# Scrutiny layers scrutinycheck does not port yet: ATA device statistics (GP log 0x04)
-# and the Seagate FARM log. Mismatches there are reported apart as known gaps.
-UNPORTED_PREFIXES = ("devstat_", "farm_")
+# Attribute-id prefixes of Scrutiny layers scrutinycheck does not port yet: mismatches there
+# are reported apart as known gaps ("unported:*"). Empty since ATA device statistics
+# ("devstat_") and the Seagate FARM log ("farm_") were ported.
+UNPORTED_PREFIXES = ()
 
 # Accepted deviation: Go's encoding/json rejects the whole document on any type error in
 # any field it knows, even one that plays no part in the evaluation (Scrutiny's API then
@@ -510,7 +511,8 @@ def compare(g, r):
             return [(f"error-parity:{side}", {"go": g.get("error"), "rust": r.get("error")})]
         return []
     out = []
-    gbits = {k: v["status"] & ~8 for k, v in g["attributes"].items() if v["status"] & ~8}
+    # All four bits, InvalidValue (8) included: scrutinycheck reports it as an "unknown" finding.
+    gbits = {k: v["status"] for k, v in g["attributes"].items() if v["status"]}
     rbits = defaultdict(int)
     for f in r["findings"]:
         if f["source"] in ("smart_overall", "no_data"):
@@ -683,7 +685,7 @@ def main():
         with open(CORPUS, "w", encoding="utf-8", newline="\n") as f:
             for _, (doc, g) in items:
                 exp = {"error": bool(g.get("error")), "device_status": g["device_status"],
-                       "bits": {k: v["status"] & ~8 for k, v in g["attributes"].items() if v["status"] & ~8}}
+                       "bits": {k: v["status"] for k, v in g["attributes"].items() if v["status"]}}
                 f.write(json.dumps({"doc": doc, "expected": exp}, separators=(",", ":")) + "\n")
         print(f"\nregression corpus: {len(items)} diverse cases -> {os.path.relpath(CORPUS, ROOT)}")
 

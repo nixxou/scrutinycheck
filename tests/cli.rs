@@ -134,3 +134,65 @@ fn missing_smart_status_fails_like_scrutiny_and_not_in_strict() {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v[0]["status"], "pass");
 }
+
+/// Writes a generated smartctl document where the tests may leave files.
+fn generated_case(name: &str, doc: serde_json::Value) -> String {
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    std::fs::write(&path, doc.to_string()).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+/// An SSD at 100 % of its rated endurance (ATA device statistics, page 7 offset 8).
+/// Oracle: device_status 2 (FailedScrutiny), devstat_7_8 = FailedScrutiny.
+#[test]
+fn worn_out_ssd_fails_on_its_device_statistics() {
+    let f = generated_case(
+        "devstat-percentage-used.json",
+        serde_json::json!({
+            "device": {"protocol": "ATA"},
+            "rotation_rate": 0,
+            "smart_status": {"passed": true},
+            "ata_device_statistics": {"pages": [{"number": 7, "name": "Solid State Device Statistics", "table": [
+                {"offset": 8, "name": "Percentage Used Endurance Indicator", "value": 100, "flags": {"valid": true}}
+            ]}]}
+        }),
+    );
+    for args in [vec!["-f", &f], vec!["--strict", "-f", &f]] {
+        let out = bin().args(&args).output().unwrap();
+        assert_eq!(out.status.code(), Some(4), "{args:?}");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("[FAILED] devstat_7_8 Percentage Used Endurance Indicator raw=100"), "{text}");
+    }
+}
+
+/// A corrupted FARM counter and a corrupted device statistic (above 1,000,000 where lower
+/// is better). Oracle: device_status 0, both attributes = InvalidValue (8).
+#[test]
+fn implausible_statistics_are_listed_but_never_change_the_verdict() {
+    let f = generated_case(
+        "devstat-farm-invalid.json",
+        serde_json::json!({
+            "device": {"protocol": "ATA"},
+            "rotation_rate": 7200,
+            "smart_status": {"passed": true},
+            "ata_device_statistics": {"pages": [{"number": 3, "table": [
+                {"offset": 32, "value": 281474976710655_i64, "flags": {"valid": true}}
+            ]}]},
+            "seagate_farm_log": {"supported": true, "page_3_error_statistics": {"total_crc_errors": 1000001}}
+        }),
+    );
+    for args in [vec!["-f", &f], vec!["--strict", "-f", &f]] {
+        let out = bin().args(&args).output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{args:?}");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("OK (2 alerts)"), "{text}");
+        assert!(text.contains("[UNKNOWN] devstat_3_32 Number of Reallocated Logical Sectors"), "{text}");
+        assert!(text.contains("[UNKNOWN] farm_crc_errors CRC Errors (FARM) raw=1000001"), "{text}");
+    }
+    let out = bin().args(["--json", "-f", &f]).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v[0]["status"], "pass");
+    assert_eq!(v[0]["findings"][0]["source"], "devstat");
+    assert_eq!(v[0]["findings"][0]["status"], "unknown");
+    assert_eq!(v[0]["findings"][1]["source"], "farm");
+}

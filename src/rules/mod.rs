@@ -11,6 +11,8 @@
 //! 1. Overall SMART self-assessment (`smart_status.passed`), [`Source::SmartOverall`].
 //! 2. Per-protocol attribute rules, dispatched on `device.protocol` exactly like the fork's
 //!    `FromCollectorSmartInfoWithOverrides`: [`ata`], [`nvme`] or [`scsi`].
+//! 3. On ATA devices only, after the attributes: ATA device statistics ([`devstat`], GP log
+//!    0x04) and the Seagate FARM log ([`farm`]).
 //!
 //! # Mapping of the fork's status bits to [`Status`]
 //!
@@ -21,15 +23,20 @@
 //! | -------------------------------------- | ------------------------------------------------------ | ------------------------------------- |
 //! | `AttributeStatusPassed` (0)            | nothing to report                                      | no finding ([`Status::Pass`])         |
 //! | `AttributeStatusFailedSmart` (1)       | ATA `when_failed == "now"`                             | [`Status::Fail`], `Manufacturer`      |
-//! | `AttributeStatusWarningScrutiny` (2)   | ATA `when_failed == "past"`; non-critical AFR >= 10 %  | [`Status::Warning`]                   |
-//! | `AttributeStatusFailedScrutiny` (4)    | AFR cutoffs; NVMe / SCSI recommended thresholds        | [`Status::Fail`]                      |
-//! | `AttributeStatusInvalidValue` (8)      | ATA device statistics only (not ported)                | would be [`Status::Unknown`]          |
+//! | `AttributeStatusWarningScrutiny` (2)   | ATA `when_failed == "past"`; non-critical AFR >= 10 %; non-zero critical device statistic / FARM error count | [`Status::Warning`] |
+//! | `AttributeStatusFailedScrutiny` (4)    | AFR cutoffs; NVMe / SCSI recommended thresholds; device statistic threshold (`devstat_7_8` >= 100) | [`Status::Fail`] |
+//! | `AttributeStatusInvalidValue` (8)      | device statistic / FARM value above 1,000,000 where lower is better | [`Status::Unknown`], `Devstat` / `Farm` |
 //! | `DeviceStatusFailedSmart`              | `smart_status.passed == false`                         | [`Status::Fail`], `SmartOverall`      |
 //! | `DeviceStatusFailedScrutiny`           | any attribute carrying `FailedScrutiny`                | follows from the attribute finding    |
 //!
-//! The verdict of [`evaluate`] is the worst finding. That is deliberately stricter than the
-//! fork's device status in two places, because the fork's device status has no warning level
-//! and does not look at the attribute-level `FailedSmart` bit:
+//! A device statistic or FARM attribute carries at most one bit, so each maps to one finding.
+//! `InvalidValue` never reaches the fork's device status; its finding is listed but takes no
+//! part in the verdict under either policy (one corrupted counter does not make a drive
+//! "unknown").
+//!
+//! Apart from that, the verdict of [`evaluate`] is the worst finding. That is deliberately
+//! stricter than the fork's device status in two places, because the fork's device status has
+//! no warning level and does not look at the attribute-level `FailedSmart` bit:
 //!
 //! * a warning-only device is `Warning` here, while the fork keeps the device "passed" and
 //!   only colours the attribute;
@@ -48,8 +55,10 @@
 //!   the previous collection (`UseDeltaEvaluation`). A single run has no previous value, so
 //!   such findings are reported the way the fork reports a first submission.
 //!   [`is_cumulative_counter`] identifies them.
-//! * Replacement-risk score, power-on-hours rollover detection, Seagate FARM, ATA device
-//!   statistics, user overrides and the `failures.transient.ata` setting.
+//! * Replacement-risk score, power-on-hours rollover detection (which also reads the FARM
+//!   hour counters), user overrides and the `failures.transient.ata` setting. The
+//!   `failures.ignored.devstat` list is ported with the fork's default, which is empty
+//!   ([`devstat_thresholds::IGNORED_DEVSTAT`]).
 
 use serde::Serialize;
 
@@ -57,6 +66,9 @@ use crate::model::SmartctlOutput;
 
 pub mod ata;
 pub mod ata_thresholds;
+pub mod devstat;
+pub mod devstat_thresholds;
+pub mod farm;
 pub mod nvme;
 pub mod scsi;
 
@@ -84,6 +96,10 @@ pub enum Source {
     Nvme,
     /// SCSI/SAS rules.
     Scsi,
+    /// ATA device statistics (GP log 0x04).
+    Devstat,
+    /// Seagate FARM log.
+    Farm,
     /// The smartctl output carries nothing that can be evaluated.
     NoData,
 }
@@ -91,7 +107,8 @@ pub enum Source {
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {
     pub source: Source,
-    /// Attribute key: ATA id as string ("5"), NVMe/SCSI field name.
+    /// Attribute key, the one of the fork's attribute map: ATA id as string ("5"), NVMe/SCSI
+    /// field name, `devstat_<page>_<offset>`, `farm_<name>`.
     pub attribute: String,
     pub name: String,
     pub raw_value: Option<i64>,
@@ -106,9 +123,9 @@ pub struct Evaluation {
     pub status: Status,
     /// Only non-passing findings, worst first.
     pub findings: Vec<Finding>,
-    /// Scrutiny mode only: a duplicated ATA attribute failed Scrutiny's thresholds in an
-    /// occurrence that a later one overwrote (see `ata::evaluate`). The fork still fails
-    /// the device for it.
+    /// Scrutiny mode only: a duplicated ATA attribute or device statistic failed Scrutiny's
+    /// thresholds in an occurrence that a later one overwrote (see `ata::evaluate` and
+    /// `devstat::evaluate`). The fork still fails the device for it.
     #[serde(skip)]
     pub(crate) overwritten_failure: bool,
 }
@@ -134,7 +151,8 @@ impl AttrStatus {
     pub const FAILED_SMART: AttrStatus = AttrStatus(1);
     pub const WARNING_SCRUTINY: AttrStatus = AttrStatus(2);
     pub const FAILED_SCRUTINY: AttrStatus = AttrStatus(4);
-    /// Value exceeds a reasonable maximum (ATA device statistics, not ported).
+    /// Value exceeds a reasonable maximum (ATA device statistics and Seagate FARM): taken
+    /// for corrupted data and not judged.
     pub const INVALID_VALUE: AttrStatus = AttrStatus(8);
 
     pub fn has(self, flag: AttrStatus) -> bool {
@@ -173,7 +191,9 @@ pub(crate) fn recommended_threshold_status(
     threshold: Option<i64>,
 ) -> AttrStatus {
     let mut status = AttrStatus::PASSED;
-    if let Some(threshold) = threshold {
+    // The fork's `-1 is a special number meaning no threshold` also applies to a threshold
+    // read from the drive (NVMe `available_spare_threshold`): -1 there disables the check.
+    if let Some(threshold) = threshold.filter(|t| *t != -1) {
         let failing = match ideal {
             Ideal::Low => value > threshold,
             Ideal::High => value < threshold,
@@ -202,7 +222,13 @@ pub fn is_cumulative_counter(finding: &Finding) -> bool {
         Source::Scsi => {
             scsi::scsi_metadata_for(&finding.attribute).is_some_and(|m| m.use_delta_evaluation)
         }
-        Source::SmartOverall | Source::Manufacturer | Source::Nvme | Source::NoData => false,
+        // The fork trend-evaluates ATA and SCSI attributes only (`deltaEvaluatedAttributeID`).
+        Source::SmartOverall
+        | Source::Manufacturer
+        | Source::Nvme
+        | Source::Devstat
+        | Source::Farm
+        | Source::NoData => false,
     }
 }
 
@@ -226,7 +252,7 @@ fn protocol_of(dev: &SmartctlOutput, exact: bool) -> Option<Protocol> {
         // The fork evaluates nothing without a protocol.
         None if exact => None,
         None => {
-            if dev.ata_smart_attributes.is_some() {
+            if dev.ata_smart_attributes.is_some() || dev.ata_device_statistics.is_some() {
                 Some(Protocol::Ata)
             } else if dev.nvme_smart_health_information_log.is_some() {
                 Some(Protocol::Nvme)
@@ -270,14 +296,15 @@ fn no_data_finding(dev: &SmartctlOutput) -> Finding {
 pub enum Policy {
     /// Exactly the fork's device status (`FromCollectorSmartInfoWithOverrides`): the device
     /// fails when `smart_status.passed` is not true (a missing field decodes to false in Go)
-    /// or when an attribute carries `FailedScrutiny`; otherwise it passes. Warnings and the
-    /// attribute-level `FailedSmart` bit (`when_failed == "now"`) are reported on their
-    /// attribute but do not change the verdict.
+    /// or when an attribute carries `FailedScrutiny`; otherwise it passes. Warnings, the
+    /// attribute-level `FailedSmart` bit (`when_failed == "now"`) and `InvalidValue` are
+    /// reported on their attribute but do not change the verdict.
     #[default]
     Scrutiny,
     /// The verdict is the worst finding: warnings make the device `Warning`, a manufacturer
     /// threshold failing now makes it `Fail`, and missing SMART data gives `Unknown` instead
-    /// of a failure.
+    /// of a failure. An `InvalidValue` device statistic or FARM attribute is the exception:
+    /// as in the fork, it is listed but does not count.
     Strict,
 }
 
@@ -304,8 +331,14 @@ pub fn evaluate_with(dev: &SmartctlOutput, policy: Policy) -> Evaluation {
             },
         );
     }
+    // Attribute findings that carry the fork's `FailedScrutiny` bit and propagate it.
     let failed_scrutiny = evaluation.findings.iter().any(|f| {
-        f.status == Status::Fail && matches!(f.source, Source::Backblaze | Source::Nvme | Source::Scsi)
+        f.status == Status::Fail
+            && match f.source {
+                Source::Backblaze | Source::Nvme | Source::Scsi | Source::Farm => true,
+                Source::Devstat => !devstat_thresholds::is_devstat_ignored(&f.attribute),
+                Source::SmartOverall | Source::Manufacturer | Source::NoData => false,
+            }
     });
     let failed_smart = evaluation
         .findings
@@ -351,9 +384,12 @@ fn evaluate_inner(dev: &SmartctlOutput, exact: bool) -> Evaluation {
 
     usable |= match protocol_of(dev, exact) {
         Some(Protocol::Ata) => {
-            let (usable, overwritten) = ata::evaluate(dev, &mut findings, exact);
-            overwritten_failure = overwritten;
-            usable
+            // the fork's order: attribute table, device statistics, FARM log
+            let (attributes, overwritten_attribute) = ata::evaluate(dev, &mut findings, exact);
+            let (statistics, overwritten_statistic) = devstat::evaluate(dev, &mut findings, exact);
+            let farm = farm::evaluate(dev, &mut findings);
+            overwritten_failure = overwritten_attribute || overwritten_statistic;
+            attributes || statistics || farm
         }
         Some(Protocol::Nvme) => nvme::evaluate(dev, &mut findings, exact),
         Some(Protocol::Scsi) => scsi::evaluate(dev, &mut findings),
@@ -368,6 +404,7 @@ fn evaluate_inner(dev: &SmartctlOutput, exact: bool) -> Evaluation {
     findings.sort_by_key(|f| std::cmp::Reverse(f.status));
     let status = findings
         .iter()
+        .filter(|f| !devstat::is_invalid_value_finding(f))
         .map(|f| f.status)
         .max()
         .unwrap_or(Status::Pass);
@@ -554,6 +591,69 @@ mod tests {
             "nvme_smart_health_information_log": {"media_errors": 7}
         }));
         assert_eq!(eval.status, Status::Pass);
+    }
+
+    #[test]
+    fn ata_layers_are_all_evaluated_and_any_failed_scrutiny_fails_the_device() {
+        // attribute 5 passes, percentage used (device statistics) fails, FARM warns
+        let dev: SmartctlOutput = serde_json::from_value(json!({
+            "device": {"protocol": "ATA"},
+            "rotation_rate": 7200,
+            "smart_status": {"passed": true},
+            "ata_smart_attributes": {"table": [
+                {"id": 5, "value": 100, "thresh": 5, "when_failed": "", "raw": {"value": 0}}
+            ]},
+            "ata_device_statistics": {"pages": [
+                {"number": 7, "table": [{"offset": 8, "value": 100, "flags": {"valid": true}}]}
+            ]},
+            "seagate_farm_log": {"supported": true, "page_3_error_statistics": {"total_crc_errors": 1}}
+        }))
+        .unwrap();
+        for policy in [Policy::Scrutiny, Policy::Strict] {
+            let eval = evaluate_with(&dev, policy);
+            assert_eq!(eval.status, Status::Fail);
+            let order: Vec<(&str, Source, Status)> = eval
+                .findings
+                .iter()
+                .map(|f| (f.attribute.as_str(), f.source, f.status))
+                .collect();
+            assert_eq!(
+                order,
+                [
+                    ("devstat_7_8", Source::Devstat, Status::Fail),
+                    ("farm_crc_errors", Source::Farm, Status::Warning)
+                ]
+            );
+            assert!(eval.findings.iter().all(|f| !is_cumulative_counter(f)));
+        }
+    }
+
+    #[test]
+    fn device_statistics_alone_are_usable_data() {
+        // no smart_status, no attribute table: strict judges what is there
+        let value = json!({
+            "device": {"protocol": "ATA"},
+            "ata_device_statistics": {"pages": [
+                {"number": 4, "table": [{"offset": 8, "value": 0, "flags": {"valid": true}}]}
+            ]}
+        });
+        assert_eq!(run(value.clone()).status, Status::Pass);
+        // without a protocol, strict infers ATA from the section; Scrutiny evaluates nothing
+        let mut no_protocol = value;
+        no_protocol.as_object_mut().unwrap().remove("device");
+        no_protocol["ata_device_statistics"]["pages"][0]["table"][0]["value"] = json!(3);
+        let dev: SmartctlOutput = serde_json::from_value(no_protocol).unwrap();
+        let strict = evaluate_with(&dev, Policy::Strict);
+        assert_eq!(strict.status, Status::Warning);
+        assert_eq!(strict.findings[0].source, Source::Devstat);
+        let scrutiny = evaluate_with(&dev, Policy::Scrutiny);
+        assert!(scrutiny.findings.iter().all(|f| f.source != Source::Devstat));
+    }
+
+    #[test]
+    fn source_names_serialize_in_snake_case() {
+        assert_eq!(serde_json::to_value(Source::Devstat).unwrap(), "devstat");
+        assert_eq!(serde_json::to_value(Source::Farm).unwrap(), "farm");
     }
 
     #[test]
