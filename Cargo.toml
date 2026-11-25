@@ -1,6 +1,6 @@
 [package]
 name = "scrutinycheck"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Disk health verdict from smartctl JSON, using Scrutiny's rules, as a single CLI"
 license = "MIT"
