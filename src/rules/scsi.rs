@@ -186,6 +186,24 @@ fn key_index(key: &str, prefix: &str) -> Option<u32> {
 }
 
 /// `parseScsiSasPhys`: every PHY of every SAS port, sorted by port then PHY.
+/// The fork decodes each PHY object with `json.Unmarshal` into a struct with a string link
+/// rate and int64 counters, and silently drops the PHY on any type error. `null` is accepted
+/// (it leaves the zero value), a fractional or out-of-range number is not.
+fn phy_decodes_like_go(value: &serde_json::Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let rate_ok = match object.get("negotiated_logical_link_rate") {
+        None | Some(serde_json::Value::Null) | Some(serde_json::Value::String(_)) => true,
+        Some(_) => false,
+    };
+    rate_ok
+        && SAS_PHY_COUNTERS.iter().all(|name| match object.get(*name) {
+            None | Some(serde_json::Value::Null) => true,
+            Some(v) => v.as_i64().is_some(),
+        })
+}
+
 pub fn sas_phys(ports: &ScsiSasPorts) -> Vec<SasPhy> {
     let mut phys = Vec::new();
     for (port_key, port_value) in &ports.0 {
@@ -199,6 +217,9 @@ pub fn sas_phys(ports: &ScsiSasPorts) -> Vec<SasPhy> {
             let Some(phy) = key_index(phy_key, "phy_") else {
                 continue;
             };
+            if !phy_decodes_like_go(phy_value) {
+                continue;
+            }
             let counters = SAS_PHY_COUNTERS
                 .iter()
                 .filter_map(|name| Some((*name, phy_value.get(name)?.as_i64()?)))

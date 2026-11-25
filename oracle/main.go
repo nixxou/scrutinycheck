@@ -1,15 +1,21 @@
 // scrutiny-oracle: runs the UNMODIFIED Scrutiny (Starosdev fork) evaluation code on
-// saved `smartctl -x --json` files and prints the per-attribute status bits as JSON.
+// `smartctl -x --json` documents and prints the per-attribute status bits as JSON.
 //
 // This file is the only code we add; it must be copied into a checkout of the fork
 // (see oracle/build.sh) because it imports the fork's packages. It calls the same
 // entry point the web backend uses when a collector uploads SMART data:
 // measurements.Smart.FromCollectorSmartInfo, with the fork's default configuration.
 //
-// Usage: scrutiny-oracle [-profiles] FILE.json...
+// Usage:
+//
+//	scrutiny-oracle [-profiles] FILE.json...   one JSON array with a result per file
+//	scrutiny-oracle [-profiles] -batch         streaming: one smartctl document per
+//	                                           stdin line, one result line per input
+//	                                           line, flushed after each line
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -26,8 +32,8 @@ type attrOut struct {
 	Transformed int64 `json:"transformed"`
 }
 
-type fileOut struct {
-	File         string             `json:"file"`
+type result struct {
+	File         string             `json:"file,omitempty"`
 	Error        string             `json:"error,omitempty"`
 	Protocol     string             `json:"protocol,omitempty"`
 	DeviceStatus uint8              `json:"device_status"`
@@ -36,8 +42,41 @@ type fileOut struct {
 	FailingIds []string `json:"failing_ids"`
 }
 
+// evaluate runs the fork's code on one document. A panic inside the fork is
+// reported as an error result instead of killing the process: it is a finding.
+func evaluate(cfg config.Interface, data []byte) (res result) {
+	res = result{Attributes: map[string]attrOut{}, FailingIds: []string{}}
+	defer func() {
+		if r := recover(); r != nil {
+			res = result{Error: fmt.Sprintf("panic: %v", r), Attributes: map[string]attrOut{}, FailingIds: []string{}}
+		}
+	}()
+	var info collector.SmartInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		res.Error = "json: " + err.Error()
+		return res
+	}
+	sm := measurements.Smart{}
+	if err := sm.FromCollectorSmartInfo(cfg, "oracle", info); err != nil {
+		res.Error = "eval: " + err.Error()
+		return res
+	}
+	res.Protocol = sm.DeviceProtocol
+	res.DeviceStatus = uint8(sm.Status)
+	for id, a := range sm.Attributes {
+		st := uint8(a.GetStatus())
+		res.Attributes[id] = attrOut{Status: st, Transformed: a.GetTransformedValue()}
+		if st != 0 {
+			res.FailingIds = append(res.FailingIds, id)
+		}
+	}
+	sort.Strings(res.FailingIds)
+	return res
+}
+
 func main() {
 	profiles := flag.Bool("profiles", false, "enable consumer drive profiles (fork default: on)")
+	batch := flag.Bool("batch", false, "read one JSON document per stdin line, write one result per line")
 	flag.Parse()
 
 	cfg, err := config.Create()
@@ -49,42 +88,40 @@ func main() {
 	// against the generic rules unless asked otherwise.
 	cfg.Set(config.DB_USER_SETTINGS_SUBKEY+".metrics.consumer_drive_profiles_enabled", *profiles)
 
-	var out []fileOut
-	for _, path := range flag.Args() {
-		res := fileOut{File: path, Attributes: map[string]attrOut{}, FailingIds: []string{}}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			res.Error = err.Error()
-			out = append(out, res)
-			continue
-		}
-		var info collector.SmartInfo
-		if err := json.Unmarshal(data, &info); err != nil {
-			res.Error = "json: " + err.Error()
-			out = append(out, res)
-			continue
-		}
-		sm := measurements.Smart{}
-		if err := sm.FromCollectorSmartInfo(cfg, "oracle", info); err != nil {
-			res.Error = "eval: " + err.Error()
-			out = append(out, res)
-			continue
-		}
-		res.Protocol = sm.DeviceProtocol
-		res.DeviceStatus = uint8(sm.Status)
-		for id, a := range sm.Attributes {
-			st := uint8(a.GetStatus())
-			res.Attributes[id] = attrOut{Status: st, Transformed: a.GetTransformedValue()}
-			if st != 0 {
-				res.FailingIds = append(res.FailingIds, id)
+	if *batch {
+		in := bufio.NewReaderSize(os.Stdin, 1<<20)
+		out := bufio.NewWriterSize(os.Stdout, 1<<16)
+		enc := json.NewEncoder(out)
+		for {
+			line, err := in.ReadBytes('\n')
+			if len(line) > 0 {
+				if err := enc.Encode(evaluate(cfg, line)); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				out.Flush()
+			}
+			if err != nil {
+				return
 			}
 		}
-		sort.Strings(res.FailingIds)
-		out = append(out, res)
+	}
+
+	var results []result
+	for _, path := range flag.Args() {
+		data, err := os.ReadFile(path)
+		var res result
+		if err != nil {
+			res = result{Error: err.Error(), Attributes: map[string]attrOut{}, FailingIds: []string{}}
+		} else {
+			res = evaluate(cfg, data)
+		}
+		res.File = path
+		results = append(results, res)
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	if err := enc.Encode(out); err != nil {
+	if err := enc.Encode(results); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

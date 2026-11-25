@@ -1,0 +1,22 @@
+{
+ "device": {
+  "protocol": "ATA"
+ },
+ "smart_status": {
+  "passed": true
+ },
+ "rotation_rate": 1,
+ "ata_smart_attributes": {
+  "table": [
+   {
+    "id": 5,
+    "raw": {
+     "value": 387
+    }
+   },
+   {
+    "id": 5
+   }
+  ]
+ }
+}

@@ -1,0 +1,6 @@
+{
+ "what": "negative user_capacity.bytes is decoded (int64), not rejected",
+ "error": false,
+ "device_status": 0,
+ "bits": {}
+}

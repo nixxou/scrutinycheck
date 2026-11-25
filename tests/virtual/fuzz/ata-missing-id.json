@@ -1,0 +1,10 @@
+{
+ "device": {
+  "protocol": "ATA"
+ },
+ "ata_smart_attributes": {
+  "table": [
+   {}
+  ]
+ }
+}

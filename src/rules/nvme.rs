@@ -128,14 +128,23 @@ fn judged_attributes(log: &NvmeHealthLog) -> [(&'static str, Option<i64>, i64); 
 }
 
 /// Evaluate the health log. Returns false when the device reports none.
-pub(super) fn evaluate(dev: &SmartctlOutput, findings: &mut Vec<Finding>) -> bool {
-    let Some(log) = &dev.nvme_smart_health_information_log else {
-        return false;
+pub(super) fn evaluate(dev: &SmartctlOutput, findings: &mut Vec<Finding>, exact: bool) -> bool {
+    let empty = NvmeHealthLog::default();
+    let log = match &dev.nvme_smart_health_information_log {
+        Some(log) => log,
+        // The fork decodes a missing log as all zeros and evaluates it anyway.
+        None if exact => &empty,
+        None => return false,
     };
     for (id, value, threshold) in judged_attributes(log) {
         // The fork reads an absent field as 0. That is harmless for the "low is ideal"
-        // fields, but would fail `available_spare`; an absent field is skipped here.
-        let Some(value) = value else { continue };
+        // fields, but fails `available_spare` when the drive threshold is above 0. In exact
+        // (Scrutiny) mode that is reproduced; otherwise an absent field is skipped.
+        let value = match value {
+            Some(v) => v,
+            None if exact => 0,
+            None => continue,
+        };
         let status = evaluate_attribute(id, value, Some(threshold));
         if status == AttrStatus::PASSED {
             continue;
@@ -205,7 +214,7 @@ mod tests {
         let dev: SmartctlOutput =
             serde_json::from_value(json!({"nvme_smart_health_information_log": log})).unwrap();
         let mut findings = Vec::new();
-        assert!(evaluate(&dev, &mut findings));
+        assert!(evaluate(&dev, &mut findings, false));
         findings
     }
 
@@ -340,6 +349,6 @@ mod tests {
     #[test]
     fn missing_log_is_not_usable_data() {
         let mut findings = Vec::new();
-        assert!(!evaluate(&SmartctlOutput::default(), &mut findings));
+        assert!(!evaluate(&SmartctlOutput::default(), &mut findings, false));
     }
 }

@@ -1,0 +1,6 @@
+{
+ "what": "NVMe protocol without a health log: all-zero log",
+ "error": false,
+ "device_status": 0,
+ "bits": {}
+}

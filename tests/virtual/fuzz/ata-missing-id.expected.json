@@ -1,0 +1,6 @@
+{
+ "what": "attribute without id reads as id 0 instead of rejecting the document",
+ "error": false,
+ "device_status": 1,
+ "bits": {}
+}

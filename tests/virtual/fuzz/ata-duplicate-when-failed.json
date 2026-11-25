@@ -1,0 +1,19 @@
+{
+ "device": {
+  "protocol": "ATA"
+ },
+ "smart_status": {
+  "passed": true
+ },
+ "ata_smart_attributes": {
+  "table": [
+   {
+    "id": 12,
+    "when_failed": "now"
+   },
+   {
+    "id": 12
+   }
+  ]
+ }
+}

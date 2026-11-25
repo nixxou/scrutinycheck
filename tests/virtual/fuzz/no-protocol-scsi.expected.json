@@ -1,0 +1,6 @@
+{
+ "what": "device.protocol missing on SCSI data",
+ "error": false,
+ "device_status": 0,
+ "bits": {}
+}

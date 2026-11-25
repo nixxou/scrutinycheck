@@ -1,0 +1,6 @@
+{
+ "what": "SAS PHY with a wrongly typed field is dropped, like Go's per-PHY decode",
+ "error": false,
+ "device_status": 0,
+ "bits": {}
+}

@@ -1,0 +1,14 @@
+{
+ "device": {
+  "protocol": "SCSI"
+ },
+ "smart_status": {
+  "passed": true
+ },
+ "scsi_sas_port_0": {
+  "phy_0": {
+   "negotiated_logical_link_rate": true,
+   "invalid_dword_count": 8
+  }
+ }
+}

@@ -45,6 +45,11 @@ struct Cli {
     /// Path to the smartctl executable.
     #[arg(long, value_name = "PATH")]
     smartctl: Option<String>,
+
+    /// Test harness: read one smartctl JSON document per stdin line and write one
+    /// compact result per line (both policies), flushed after each line.
+    #[arg(long, hide = true)]
+    batch: bool,
 }
 
 #[derive(Serialize)]
@@ -79,7 +84,82 @@ fn main() -> ExitCode {
     }
 }
 
+#[derive(Serialize)]
+struct BatchFinding<'a> {
+    attribute: &'a str,
+    source: rules::Source,
+    status: Status,
+}
+
+#[derive(Serialize, Default)]
+struct BatchResult<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<Status>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    strict_status: Option<Status>,
+    findings: Vec<BatchFinding<'a>>,
+}
+
+/// `--batch`: the differential fuzzer keeps this process running and streams
+/// documents through it. A panic is reported as an error line (it is a bug to
+/// find), not a crash.
+fn run_batch() -> anyhow::Result<u8> {
+    use std::io::{BufRead, Write};
+    let stdin = std::io::stdin();
+    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+    let mut line = String::new();
+    let mut input = stdin.lock();
+    std::panic::set_hook(Box::new(|_| {}));
+    loop {
+        line.clear();
+        if input.read_line(&mut line)? == 0 {
+            return Ok(0);
+        }
+        let text = line.clone();
+        let outcome = std::panic::catch_unwind(move || -> String {
+            let dev: scrutinycheck::model::SmartctlOutput = match serde_json::from_str(&text) {
+                Ok(d) => d,
+                Err(e) => {
+                    let r = BatchResult { error: Some(format!("json: {e}")), ..Default::default() };
+                    return serde_json::to_string(&r).unwrap();
+                }
+            };
+            let default = rules::evaluate_with(&dev, Policy::Scrutiny);
+            let strict = rules::evaluate_with(&dev, Policy::Strict);
+            let r = BatchResult {
+                error: None,
+                status: Some(default.status),
+                strict_status: Some(strict.status),
+                findings: default
+                    .findings
+                    .iter()
+                    .map(|f| BatchFinding { attribute: &f.attribute, source: f.source, status: f.status })
+                    .collect(),
+            };
+            serde_json::to_string(&r).unwrap()
+        });
+        let json = match outcome {
+            Ok(j) => j,
+            Err(p) => {
+                let msg = p
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+                    .unwrap_or_default();
+                serde_json::to_string(&BatchResult { error: Some(format!("panic: {msg}")), ..Default::default() })?
+            }
+        };
+        writeln!(out, "{json}")?;
+        out.flush()?;
+    }
+}
+
 fn run(cli: Cli) -> anyhow::Result<u8> {
+    if cli.batch {
+        return run_batch();
+    }
     let mut entries = Vec::new();
     let policy = if cli.strict { Policy::Strict } else { Policy::Scrutiny };
 

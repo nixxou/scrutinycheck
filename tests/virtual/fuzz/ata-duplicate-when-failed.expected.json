@@ -1,0 +1,6 @@
+{
+ "what": "duplicate id: an overwritten when_failed=now is dropped",
+ "error": false,
+ "device_status": 0,
+ "bits": {}
+}

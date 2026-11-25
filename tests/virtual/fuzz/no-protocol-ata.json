@@ -1,0 +1,13 @@
+{
+ "rotation_rate": 1,
+ "ata_smart_attributes": {
+  "table": [
+   {
+    "id": 5,
+    "raw": {
+     "value": 387
+    }
+   }
+  ]
+ }
+}

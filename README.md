@@ -97,8 +97,21 @@ see "Differential test"). A disk is `FAILED` if and only if:
 Otherwise it is `OK`, even when it carries alerts: the line then reads
 `OK (n alert(s))` and the alerts are listed below it.
 
+Scrutiny mode also reproduces how Scrutiny reads its input, quirks included
+(all found by the differential fuzzer, see "Development"):
+
+- without `device.protocol` (exactly `ATA`, `NVMe` or `SCSI`), no attribute is
+  evaluated;
+- an absent NVMe health field counts as 0 (so a missing `available_spare` fails
+  when the drive's spare threshold is above 0);
+- when an ATA attribute id appears twice, the last occurrence is the one
+  reported, but a failure of an earlier occurrence still fails the disk;
+- a SAS PHY with a wrongly typed field is ignored.
+
 **With `--strict`, the verdict is the worst alert.** This changes three cases
-(examples below).
+(examples below). Strict mode also reads input more sensibly: it infers the
+protocol from the sections present, skips absent NVMe fields and reports every
+occurrence of a duplicated attribute.
 
 ### Why an option
 
@@ -189,8 +202,9 @@ single run cannot know that, hence the "cumulative counter" note.
    documented).
 3. NVMe and SCSI: Scrutiny's rules.
 
-Not implemented yet: consumer drive profiles, risk score, history and trends,
-reproducible recomputation of the Backblaze tables.
+Not implemented yet: ATA device statistics (`ata_device_statistics`) and the
+Seagate FARM log, which Scrutiny also evaluates; consumer drive profiles, risk
+score, history and trends, reproducible recomputation of the Backblaze tables.
 
 ## Development
 
@@ -198,27 +212,56 @@ reproducible recomputation of the Backblaze tables.
 cargo test
 ```
 
-The tests use real smartctl outputs (`tests/fixtures/`, taken from Scrutiny's
-test data) and a fake `smartctl` script: no physical disk is needed.
+No physical disk and no Go toolchain is needed. The tests use:
 
-### Differential test against Scrutiny
+- real smartctl outputs (`tests/fixtures/`, taken from Scrutiny's test data);
+- a fake `smartctl` script for the collection path (standby, `--wake`, scan);
+- **Scrutiny parity cases** (`tests/scrutiny_parity.rs`): 500 diverse generated
+  drives (`tests/virtual/corpus.jsonl`) and one minimized case per mismatch
+  class the fuzzer ever found (`tests/virtual/fuzz/`), each with the verdict
+  recorded from Scrutiny's own code.
+
+### Differential testing against Scrutiny
 
 `oracle/` builds the **unmodified** Go code of the Scrutiny fork (commit pinned
-in `oracle/build.sh`) with a small entry point (`oracle/main.go`). Then
-`oracle/differential.py` generates thousands of virtual cases (bucket bounds
-±1, extreme values, `when_failed`, Seagate raw strings, NVMe/SCSI fields) and
-compares the status bits attribute by attribute, plus the verdict of each disk.
+in `oracle/build.sh`) with a small entry point (`oracle/main.go`). Both tools
+have a streaming batch mode (one smartctl document per line), so the
+comparison runs at about 2,700 cases per second.
 
 ```
 oracle/build.sh WORKDIR                       # requires Go and git
 cargo build --release
-python oracle/differential.py --oracle WORKDIR/scrutiny-oracle.exe \
-  --rust target/release/scrutinycheck.exe --work WORKDIR/cases \
+python oracle/fuzz.py --oracle WORKDIR/scrutiny-oracle.exe \
+  --rust target/release/scrutinycheck.exe --cases 300000 --seed 1 \
   --go-src WORKDIR/scrutiny-src/webapp/backend/pkg/thresholds/ata_attribute_metadata.go
 ```
 
-In the default mode, both the attribute statuses **and** the verdict of each
-disk match Scrutiny on every generated case.
+`oracle/fuzz.py` generates reproducible cases (same `--seed`, same cases):
+
+- **synthetic drives** (ATA, NVMe, SCSI/SAS) built from Scrutiny's attribute
+  metadata: random attribute sets, smartctl-style or alternative attribute
+  names, values biased towards bucket bounds ±1, `when_failed`, vendor raw
+  strings (Seagate packed values, `12345h+07m`, temperature min/max);
+- **mutated real outputs**: several fields changed at once;
+- **malformed input**: missing keys, `null`, wrong types, fractional or
+  out-of-range numbers, duplicated attributes, damaged protocol.
+
+It compares attribute status bits, the SMART-failed bit and each disk's
+verdict. Every new kind of mismatch is **automatically minimized** (a 15 KB
+document typically shrinks to under 100 bytes) and saved under
+`tests/virtual/fuzz/` with both results. `--corpus N` refreshes the parity
+corpus. `oracle/regressions.py` regenerates the expected results of the
+regression cases.
+
+Latest run: 300,000 cases, **0 unexplained mismatches**. Two known gaps are
+reported apart and do not fail the run:
+
+- documents Go rejects as a whole because of a type error in any field, even
+  one unused for the evaluation (Scrutiny's API would refuse the upload);
+  scrutinycheck evaluates what it can. Real smartctl output is well-typed;
+- the ATA device statistics and FARM layers, not ported yet.
+
+`oracle/differential.py` is the earlier, single-field sweep over the fixtures.
 
 ## License
 

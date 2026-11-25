@@ -1,0 +1,6 @@
+{
+ "what": "device.protocol missing on NVMe data",
+ "error": false,
+ "device_status": 1,
+ "bits": {}
+}

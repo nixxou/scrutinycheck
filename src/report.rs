@@ -54,7 +54,11 @@ impl DeviceReport {
             protocol,
             model: dev.model_name.clone(),
             serial: dev.serial_number.clone(),
-            capacity_bytes: dev.user_capacity.as_ref().and_then(|c| c.bytes),
+            capacity_bytes: dev
+                .user_capacity
+                .as_ref()
+                .and_then(|c| c.bytes)
+                .and_then(|b| u64::try_from(b).ok()),
             kind,
             power_on_hours: dev
                 .power_on_time

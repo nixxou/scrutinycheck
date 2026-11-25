@@ -1,0 +1,8 @@
+{
+ "what": "duplicate id: the last occurrence is the one that counts",
+ "error": false,
+ "device_status": 2,
+ "bits": {
+  "5": 4
+ }
+}

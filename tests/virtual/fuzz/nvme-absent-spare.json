@@ -1,0 +1,8 @@
+{
+ "device": {
+  "protocol": "NVMe"
+ },
+ "nvme_smart_health_information_log": {
+  "available_spare_threshold": 2
+ }
+}

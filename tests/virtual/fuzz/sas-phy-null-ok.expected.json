@@ -1,0 +1,8 @@
+{
+ "what": "SAS PHY with null fields is kept (null leaves the zero value)",
+ "error": false,
+ "device_status": 2,
+ "bits": {
+  "sas_port_0_phy_0_invalid_dword_count": 4
+ }
+}

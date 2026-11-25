@@ -1,0 +1,11 @@
+{
+ "device": {
+  "protocol": "ATA"
+ },
+ "smart_status": {
+  "passed": true
+ },
+ "ata_smart_attributes": {
+  "table": null
+ }
+}

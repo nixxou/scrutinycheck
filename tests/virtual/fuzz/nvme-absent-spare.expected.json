@@ -1,0 +1,8 @@
+{
+ "what": "absent NVMe field reads as 0 (available_spare 0 < threshold 2)",
+ "error": false,
+ "device_status": 3,
+ "bits": {
+  "available_spare": 4
+ }
+}

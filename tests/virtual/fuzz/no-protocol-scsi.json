@@ -1,0 +1,10 @@
+{
+ "smart_status": {
+  "passed": true
+ },
+ "scsi_error_counter_log": {
+  "verify": {
+   "errors_corrected_by_rereads_rewrites": 1
+  }
+ }
+}

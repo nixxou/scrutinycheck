@@ -1,0 +1,11 @@
+{
+ "device": {
+  "protocol": "ATA"
+ },
+ "smart_status": {
+  "passed": true
+ },
+ "user_capacity": {
+  "bytes": -1
+ }
+}

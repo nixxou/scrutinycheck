@@ -82,7 +82,8 @@ pub struct DeviceInfo {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct UserCapacity {
     #[serde(default)]
-    pub bytes: Option<u64>,
+    /// int64 like the fork's collector model (a negative value is decoded, not rejected).
+    pub bytes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -105,12 +106,14 @@ pub struct Temperature {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct AtaSmartAttributes {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub table: Vec<AtaAttribute>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct AtaAttribute {
+    /// Like Go's zero value, a missing or `null` id reads as 0.
+    #[serde(default, deserialize_with = "null_as_default")]
     pub id: i64,
     #[serde(default)]
     pub name: Option<String>,
@@ -254,4 +257,14 @@ impl SmartctlOutput {
     pub fn device_name(&self) -> Option<&str> {
         self.device.as_ref()?.name.as_deref()
     }
+}
+
+/// Go's `encoding/json` leaves a field at its zero value for JSON `null`; serde would
+/// reject `null` for a non-`Option` field. Used where the fork's model has a plain value.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }

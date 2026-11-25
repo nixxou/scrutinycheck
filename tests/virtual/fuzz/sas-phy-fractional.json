@@ -1,0 +1,14 @@
+{
+ "device": {
+  "protocol": "SCSI"
+ },
+ "smart_status": {
+  "passed": true
+ },
+ "scsi_sas_port_1": {
+  "phy_0": {
+   "invalid_dword_count": -0.5,
+   "phy_reset_problem_count": 8
+  }
+ }
+}

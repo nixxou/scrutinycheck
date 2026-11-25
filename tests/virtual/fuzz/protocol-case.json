@@ -1,0 +1,18 @@
+{
+ "device": {
+  "protocol": "ata"
+ },
+ "smart_status": {
+  "passed": true
+ },
+ "ata_smart_attributes": {
+  "table": [
+   {
+    "id": 5,
+    "raw": {
+     "value": 387
+    }
+   }
+  ]
+ }
+}

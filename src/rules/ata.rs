@@ -257,16 +257,42 @@ pub fn failure_rate_status(critical: bool, rate: f64) -> AttrStatus {
 }
 
 /// Evaluate the attribute table. Returns false when the device reports no attribute.
-pub(super) fn evaluate(dev: &SmartctlOutput, findings: &mut Vec<Finding>) -> bool {
+/// Returns `(usable, overwritten_failure)`.
+///
+/// In `exact` (Scrutiny) mode a duplicated attribute id behaves as in the fork, which stores
+/// attributes in a map keyed by id: the last occurrence is the one reported, but a
+/// `FailedScrutiny` raised by an earlier, overwritten occurrence has already been folded
+/// into the device status. `overwritten_failure` carries that to the verdict. Otherwise
+/// every occurrence is reported.
+pub(super) fn evaluate(dev: &SmartctlOutput, findings: &mut Vec<Finding>, exact: bool) -> (bool, bool) {
     let table = match &dev.ata_smart_attributes {
         Some(attributes) if !attributes.table.is_empty() => &attributes.table,
-        _ => return false,
+        _ => return (false, false),
     };
     let is_ssd = is_ata_ssd(dev);
-    for attr in table {
-        push_findings(attr, &evaluate_attribute(attr, is_ssd), findings);
+    if !exact {
+        for attr in table {
+            push_findings(attr, &evaluate_attribute(attr, is_ssd), findings);
+        }
+        return (true, false);
     }
-    true
+    let mut per_id: Vec<(i64, Vec<Finding>)> = Vec::new();
+    let mut overwritten_failure = false;
+    for attr in table {
+        let mut own = Vec::new();
+        push_findings(attr, &evaluate_attribute(attr, is_ssd), &mut own);
+        if let Some(slot) = per_id.iter_mut().find(|(id, _)| *id == attr.id) {
+            overwritten_failure |= slot
+                .1
+                .iter()
+                .any(|f| f.source == Source::Backblaze && f.status == Status::Fail);
+            slot.1 = own;
+        } else {
+            per_id.push((attr.id, own));
+        }
+    }
+    findings.extend(per_id.into_iter().flat_map(|(_, f)| f));
+    (true, overwritten_failure)
 }
 
 fn push_findings(attr: &AtaAttribute, result: &AtaAttributeStatus, findings: &mut Vec<Finding>) {
@@ -274,7 +300,7 @@ fn push_findings(attr: &AtaAttribute, result: &AtaAttributeStatus, findings: &mu
     let name = match (metadata, &attr.name) {
         (Some(m), _) => m.display_name.to_string(),
         (None, Some(reported)) => reported.clone(),
-        (None, None) => format!("Attribut {}", attr.id),
+        (None, None) => format!("Attribute {}", attr.id),
     };
     let finding = |source, status, message, annual_failure_rate| Finding {
         source,
@@ -782,7 +808,7 @@ mod tests {
 
     fn run(dev: serde_json::Value) -> Vec<Finding> {
         let mut findings = Vec::new();
-        assert!(evaluate(&device(dev), &mut findings));
+        assert!(evaluate(&device(dev), &mut findings, false).0);
         findings
     }
 
@@ -831,9 +857,10 @@ mod tests {
         let mut findings = Vec::new();
         assert!(!evaluate(
             &device(json!({"ata_smart_attributes": {"table": []}})),
-            &mut findings
-        ));
-        assert!(!evaluate(&device(json!({})), &mut findings));
+            &mut findings,
+            false
+        ).0);
+        assert!(!evaluate(&device(json!({})), &mut findings, false).0);
         assert!(findings.is_empty());
     }
 }

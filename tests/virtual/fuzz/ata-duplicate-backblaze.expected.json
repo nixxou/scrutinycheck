@@ -1,0 +1,6 @@
+{
+ "what": "duplicate id: last occurrence reported, overwritten failure still fails the device",
+ "error": false,
+ "device_status": 2,
+ "bits": {}
+}

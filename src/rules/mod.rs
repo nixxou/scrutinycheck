@@ -106,6 +106,11 @@ pub struct Evaluation {
     pub status: Status,
     /// Only non-passing findings, worst first.
     pub findings: Vec<Finding>,
+    /// Scrutiny mode only: a duplicated ATA attribute failed Scrutiny's thresholds in an
+    /// occurrence that a later one overwrote (see `ata::evaluate`). The fork still fails
+    /// the device for it.
+    #[serde(skip)]
+    pub(crate) overwritten_failure: bool,
 }
 
 /// Which way an attribute degrades (`Ideal` in the fork's metadata).
@@ -212,12 +217,14 @@ enum Protocol {
 
 /// The fork dispatches on `device.protocol` alone. When smartctl gave no protocol (a hand-made
 /// or truncated file), fall back on the section that is present.
-fn protocol_of(dev: &SmartctlOutput) -> Option<Protocol> {
+fn protocol_of(dev: &SmartctlOutput, exact: bool) -> Option<Protocol> {
     match dev.protocol() {
         Some("ATA") => Some(Protocol::Ata),
         Some("NVMe") => Some(Protocol::Nvme),
         Some("SCSI") => Some(Protocol::Scsi),
         Some(_) => None,
+        // The fork evaluates nothing without a protocol.
+        None if exact => None,
         None => {
             if dev.ata_smart_attributes.is_some() {
                 Some(Protocol::Ata)
@@ -278,7 +285,7 @@ pub enum Policy {
 /// under every policy, except that [`Policy::Scrutiny`] adds a `SmartOverall` finding when
 /// `smart_status` is missing, to explain the failure it implies.
 pub fn evaluate_with(dev: &SmartctlOutput, policy: Policy) -> Evaluation {
-    let mut evaluation = evaluate(dev);
+    let mut evaluation = evaluate_inner(dev, policy == Policy::Scrutiny);
     if policy == Policy::Strict {
         return evaluation;
     }
@@ -304,7 +311,7 @@ pub fn evaluate_with(dev: &SmartctlOutput, policy: Policy) -> Evaluation {
         .findings
         .iter()
         .any(|f| f.source == Source::SmartOverall);
-    evaluation.status = if failed_smart || failed_scrutiny {
+    evaluation.status = if failed_smart || failed_scrutiny || evaluation.overwritten_failure {
         Status::Fail
     } else {
         Status::Pass
@@ -314,7 +321,17 @@ pub fn evaluate_with(dev: &SmartctlOutput, policy: Policy) -> Evaluation {
 
 /// Evaluate one device's smartctl JSON; the verdict is the worst finding ([`Policy::Strict`]).
 pub fn evaluate(dev: &SmartctlOutput) -> Evaluation {
+    evaluate_inner(dev, false)
+}
+
+/// `exact` reproduces the fork's input handling bug for bug (used by [`Policy::Scrutiny`]):
+/// attributes are evaluated only when `device.protocol` is exactly "ATA", "NVMe" or "SCSI",
+/// and an absent NVMe health field counts as 0, as Go's zero values make it. Without
+/// `exact` ([`Policy::Strict`]), the protocol is inferred from the sections present and an
+/// absent NVMe field is skipped.
+fn evaluate_inner(dev: &SmartctlOutput, exact: bool) -> Evaluation {
     let mut findings = Vec::new();
+    let mut overwritten_failure = false;
     let mut usable = false;
 
     if let Some(passed) = dev.smart_status.as_ref().and_then(|s| s.passed) {
@@ -332,9 +349,13 @@ pub fn evaluate(dev: &SmartctlOutput) -> Evaluation {
         }
     }
 
-    usable |= match protocol_of(dev) {
-        Some(Protocol::Ata) => ata::evaluate(dev, &mut findings),
-        Some(Protocol::Nvme) => nvme::evaluate(dev, &mut findings),
+    usable |= match protocol_of(dev, exact) {
+        Some(Protocol::Ata) => {
+            let (usable, overwritten) = ata::evaluate(dev, &mut findings, exact);
+            overwritten_failure = overwritten;
+            usable
+        }
+        Some(Protocol::Nvme) => nvme::evaluate(dev, &mut findings, exact),
         Some(Protocol::Scsi) => scsi::evaluate(dev, &mut findings),
         None => false,
     };
@@ -350,7 +371,7 @@ pub fn evaluate(dev: &SmartctlOutput) -> Evaluation {
         .map(|f| f.status)
         .max()
         .unwrap_or(Status::Pass);
-    Evaluation { status, findings }
+    Evaluation { status, findings, overwritten_failure }
 }
 
 #[cfg(test)]
