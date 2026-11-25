@@ -156,15 +156,15 @@ pub(super) fn evaluate(dev: &SmartctlOutput, findings: &mut Vec<Finding>) -> boo
 fn message(id: &str, value: i64, threshold: i64) -> String {
     match id {
         "critical_warning" => format!(
-            "avertissement critique du contrôleur ({})",
+            "controller critical warning ({})",
             critical_warning_causes(value)
         ),
         "available_spare" => {
-            format!("réserve de blocs à {value} %, sous le seuil du disque ({threshold} %)")
+            format!("available spare at {value}%, below the drive threshold ({threshold}%)")
         }
-        "percentage_used" => format!("usure à {value} % de l'endurance annoncée"),
-        "media_errors" => format!("{value} erreur(s) d'intégrité des données"),
-        _ => format!("valeur {value} hors du seuil recommandé ({threshold})"),
+        "percentage_used" => format!("{value}% of rated endurance used"),
+        "media_errors" => format!("{value} data integrity error(s)"),
+        _ => format!("value {value} outside the recommended threshold ({threshold})"),
     }
 }
 
@@ -173,12 +173,12 @@ fn message(id: &str, value: i64, threshold: i64) -> String {
 /// to make the message useful.
 fn critical_warning_causes(value: i64) -> String {
     const BITS: [(i64, &str); 6] = [
-        (0x01, "réserve sous le seuil"),
-        (0x02, "température hors limites"),
-        (0x04, "fiabilité dégradée"),
-        (0x08, "support en lecture seule"),
-        (0x10, "sauvegarde de la mémoire volatile en échec"),
-        (0x20, "mémoire persistante en lecture seule"),
+        (0x01, "spare below threshold"),
+        (0x02, "temperature out of range"),
+        (0x04, "reliability degraded"),
+        (0x08, "media read-only"),
+        (0x10, "volatile memory backup failed"),
+        (0x20, "persistent memory read-only"),
     ];
     let causes: Vec<&str> = BITS
         .iter()
@@ -318,7 +318,7 @@ mod tests {
         assert!(
             findings[0]
                 .message
-                .contains("réserve sous le seuil, fiabilité dégradée")
+                .contains("spare below threshold, reliability degraded")
         );
         assert_eq!(findings[3].raw_value, Some(2));
     }
@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn unknown_critical_warning_bit_is_shown_as_a_code() {
         assert_eq!(critical_warning_causes(0x40), "code 0x40");
-        assert_eq!(critical_warning_causes(0x08), "support en lecture seule");
+        assert_eq!(critical_warning_causes(0x08), "media read-only");
     }
 
     #[test]

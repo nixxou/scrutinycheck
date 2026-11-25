@@ -201,7 +201,7 @@ pub fn is_cumulative_counter(finding: &Finding) -> bool {
     }
 }
 
-pub(crate) const CUMULATIVE_HINT: &str = " ; compteur cumulatif, peut dater d'un incident ancien";
+pub(crate) const CUMULATIVE_HINT: &str = "; cumulative counter, may date from an old incident";
 
 #[derive(Clone, Copy)]
 enum Protocol {
@@ -244,13 +244,13 @@ fn no_data_finding(dev: &SmartctlOutput) -> Finding {
         })
         .and_then(|m| m.string.as_deref());
     let message = match smartctl_error {
-        Some(error) => format!("aucune donnée SMART exploitable (smartctl : {error})"),
-        None => "aucune donnée SMART exploitable".to_string(),
+        Some(error) => format!("no usable SMART data (smartctl: {error})"),
+        None => "no usable SMART data".to_string(),
     };
     Finding {
         source: Source::NoData,
         attribute: "smart".to_string(),
-        name: "Données SMART".to_string(),
+        name: "SMART data".to_string(),
         raw_value: None,
         status: Status::Unknown,
         message,
@@ -289,10 +289,10 @@ pub fn evaluate_with(dev: &SmartctlOutput, policy: Policy) -> Evaluation {
             Finding {
                 source: Source::SmartOverall,
                 attribute: "smart_status".to_string(),
-                name: "État SMART global".to_string(),
+                name: "SMART overall health".to_string(),
                 raw_value: None,
                 status: Status::Fail,
-                message: "état SMART global absent : compté comme un échec (logique Scrutiny)".to_string(),
+                message: "SMART overall health missing: counted as a failure (Scrutiny logic)".to_string(),
                 annual_failure_rate: None,
             },
         );
@@ -323,10 +323,10 @@ pub fn evaluate(dev: &SmartctlOutput) -> Evaluation {
             findings.push(Finding {
                 source: Source::SmartOverall,
                 attribute: "smart_status".to_string(),
-                name: "État SMART global".to_string(),
+                name: "SMART overall health".to_string(),
                 raw_value: None,
                 status: Status::Fail,
-                message: "le disque se déclare lui-même défaillant".to_string(),
+                message: "the drive reports itself as failing".to_string(),
                 annual_failure_rate: None,
             });
         }

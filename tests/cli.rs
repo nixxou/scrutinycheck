@@ -21,7 +21,8 @@ fn parse_scan_fixture() {
     let devs = scrutinycheck::collect::parse_scan(&data).unwrap();
     assert_eq!(devs.len(), 7);
     assert_eq!(devs[0].name, "/dev/sda");
-    assert_eq!(devs[0].dev_type.as_deref(), Some("scsi"));
+    // "scsi" from --scan is dropped so smartctl autodetects SAT vs SCSI.
+    assert_eq!(devs[0].dev_type, None);
 }
 
 #[test]
@@ -82,8 +83,8 @@ fn warning_only_drive_is_ok_by_default_like_scrutiny() {
     let out = bin().args(["-f", &virtual_case("ata-warning-only.json")]).output().unwrap();
     assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("OK (1 alerte)"), "{text}");
-    assert!(text.contains("[ATTENTION]"), "{text}");
+    assert!(text.contains("OK (1 alert)"), "{text}");
+    assert!(text.contains("[WARNING]"), "{text}");
 
     let out = bin().args(["--json", "-f", &virtual_case("ata-warning-only.json")]).output().unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -98,7 +99,7 @@ fn strict_mode_turns_warnings_into_device_warning() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&out.stdout).contains("ATTENTION"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("WARNING"));
 }
 
 #[test]
@@ -115,7 +116,7 @@ fn manufacturer_threshold_now_is_ok_like_scrutiny_and_fail_in_strict() {
     let f = virtual_case("ata-manufacturer-now.json");
     let out = bin().args(["-f", &f]).output().unwrap();
     assert_eq!(out.status.code(), Some(0));
-    assert!(String::from_utf8_lossy(&out.stdout).contains("OK (1 alerte)"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("OK (1 alert)"));
     let out = bin().args(["--strict", "-f", &f]).output().unwrap();
     assert_eq!(out.status.code(), Some(4));
 }

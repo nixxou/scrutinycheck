@@ -4,41 +4,46 @@ use std::process::ExitCode;
 use clap::Parser;
 use serde::Serialize;
 
-use scrutinycheck::collect::{self, ScannedDevice, Smartctl};
-use scrutinycheck::report::{self, DeviceReport, ErrorReport};
+use scrutinycheck::collect::{self, ReadOutcome, ScannedDevice, Smartctl};
+use scrutinycheck::report::{self, AsleepReport, DeviceReport, ErrorReport};
 use scrutinycheck::rules::{self, Policy, Status};
 
-/// Évalue la santé des disques à partir de smartctl, avec les règles de Scrutiny.
+/// Disk health verdict from smartctl, using Scrutiny's rules.
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
-    /// Disques à analyser (ex. /dev/sda, /dev/nvme0). Par défaut : tous ceux trouvés par `smartctl --scan`.
+    /// Devices to check (e.g. /dev/sda, /dev/nvme0). Default: every device listed by `smartctl --scan`.
     devices: Vec<String>,
 
-    /// Analyser des sorties `smartctl -x --json` enregistrées au lieu des disques.
-    #[arg(short = 'f', long = "file", value_name = "FICHIER")]
+    /// Evaluate saved `smartctl -x --json` outputs instead of live devices.
+    #[arg(short = 'f', long = "file", value_name = "FILE")]
     files: Vec<PathBuf>,
 
-    /// Type de périphérique transmis à smartctl (-d), ex. sat, nvme.
+    /// Device type passed to smartctl (-d), e.g. sat, nvme.
     #[arg(short = 'd', long = "device-type")]
     device_type: Option<String>,
 
-    /// Sortie JSON.
+    /// JSON output.
     #[arg(long)]
     json: bool,
 
-    /// Afficher les détails (série, heures, température).
+    /// Show details (serial, power-on hours, temperature).
     #[arg(short, long)]
     verbose: bool,
 
-    /// Mode strict : le verdict est la pire alerte (avertissement = ATTENTION, seuil
-    /// constructeur franchi maintenant = DÉFAILLANT, données absentes = INCONNU).
-    /// Par défaut : verdict exact de Scrutiny (voir README).
+    /// Strict mode: the verdict is the worst alert (warning = WARNING, manufacturer
+    /// threshold failing now = FAILED, missing data = UNKNOWN).
+    /// Default: Scrutiny's exact verdict (see README).
     #[arg(long)]
     strict: bool,
 
-    /// Chemin de l'exécutable smartctl.
-    #[arg(long, value_name = "CHEMIN")]
+    /// Also read drives in standby, even if that wakes them up. By default a hard
+    /// drive in STANDBY/SLEEP is skipped so it does not spin up.
+    #[arg(long)]
+    wake: bool,
+
+    /// Path to the smartctl executable.
+    #[arg(long, value_name = "PATH")]
     smartctl: Option<String>,
 }
 
@@ -46,11 +51,13 @@ struct Cli {
 #[serde(untagged)]
 enum Entry {
     Ok(DeviceReport),
+    Asleep(AsleepReport),
     Err(ErrorReport),
 }
 
 /// Exit codes: 0 all pass, 1 usage/runtime error, 2 a device could not be read
-/// or is unknown, 3 warning, 4 failure.
+/// or is unknown, 3 warning, 4 failure. A drive skipped because it is asleep is
+/// not an error and does not change the code.
 fn exit_code(worst: Option<Status>, had_error: bool) -> u8 {
     match worst {
         Some(Status::Fail) => 4,
@@ -66,7 +73,7 @@ fn main() -> ExitCode {
     match run(cli) {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
-            eprintln!("erreur : {e:#}");
+            eprintln!("error: {e:#}");
             ExitCode::from(1)
         }
     }
@@ -95,14 +102,15 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
                 .collect()
         };
         if targets.is_empty() {
-            anyhow::bail!("aucun disque trouvé par smartctl (droits administrateur/root ?)");
+            anyhow::bail!("no device found by smartctl (missing administrator/root rights?)");
         }
         for t in &targets {
-            entries.push(match smartctl.read_device(t) {
-                Ok(dev) => {
+            entries.push(match smartctl.read_device(t, cli.wake) {
+                Ok(ReadOutcome::Data(dev)) => {
                     let label = dev.device_name().unwrap_or(&t.name).to_string();
                     Entry::Ok(DeviceReport::new(label, &dev, rules::evaluate_with(&dev, policy)))
                 }
+                Ok(ReadOutcome::Asleep { mode }) => Entry::Asleep(AsleepReport::new(t.name.clone(), mode)),
                 Err(e) => Entry::Err(ErrorReport { device: t.name.clone(), error: format!("{e:#}") }),
             });
         }
@@ -112,7 +120,7 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
         .iter()
         .filter_map(|e| match e {
             Entry::Ok(r) => Some(r.evaluation.status),
-            Entry::Err(_) => None,
+            Entry::Asleep(_) | Entry::Err(_) => None,
         })
         .max();
     let had_error = entries.iter().any(|e| matches!(e, Entry::Err(_)));
@@ -123,6 +131,7 @@ fn run(cli: Cli) -> anyhow::Result<u8> {
         for e in &entries {
             match e {
                 Entry::Ok(r) => print!("{}", report::render_text(r, cli.verbose)),
+                Entry::Asleep(a) => print!("{}", report::render_asleep_text(a)),
                 Entry::Err(e) => print!("{}", report::render_error_text(e)),
             }
         }

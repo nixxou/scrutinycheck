@@ -293,23 +293,23 @@ pub(super) fn evaluate(dev: &SmartctlOutput, findings: &mut Vec<Finding>) -> boo
 
 fn message(id: &str, value: i64, threshold: i64) -> String {
     let operation = match id.split('_').next() {
-        Some("read") => "en lecture",
-        Some("write") => "en écriture",
-        Some("verify") => "en vérification",
+        Some("read") => "on read",
+        Some("write") => "on write",
+        Some("verify") => "on verify",
         _ => "",
     };
     if id == "scsi_grown_defect_list" {
-        format!("{value} défaut(s) de surface apparu(s) en service")
+        format!("{value} grown defect(s)")
     } else if id.ends_with("_total_uncorrected_errors") {
-        format!("{value} erreur(s) non corrigée(s) {operation}")
+        format!("{value} uncorrected error(s) {operation}")
     } else if id.ends_with("_errors_corrected_by_rereads_rewrites") {
-        format!("{value} erreur(s) {operation} corrigée(s) par relecture ou réécriture")
+        format!("{value} error(s) {operation} corrected by rereads/rewrites")
     } else if id.starts_with("sas_port_") {
-        format!("{value} erreur(s) de liaison SAS")
+        format!("{value} SAS link error(s)")
     } else if id == "percentage_used" {
-        format!("usure à {value} % de l'endurance annoncée")
+        format!("{value}% of rated endurance used")
     } else {
-        format!("valeur {value} hors du seuil recommandé ({threshold})")
+        format!("value {value} outside the recommended threshold ({threshold})")
     }
 }
 
@@ -477,7 +477,7 @@ mod tests {
         assert_eq!(findings[1].raw_value, Some(3));
         assert_eq!(
             findings[1].message,
-            "3 erreur(s) non corrigée(s) en lecture"
+            "3 uncorrected error(s) on read"
         );
         // only the verify re-read counter is trend-evaluated by the fork
         let cumulative: Vec<bool> = findings.iter().map(is_cumulative_counter).collect();

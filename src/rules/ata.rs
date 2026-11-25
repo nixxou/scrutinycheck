@@ -292,7 +292,7 @@ fn push_findings(attr: &AtaAttribute, result: &AtaAttributeStatus, findings: &mu
             Source::Manufacturer,
             Status::Fail,
             format!(
-                "seuil constructeur franchi (valeur {}, seuil {thresh})",
+                "manufacturer threshold failing (value {}, threshold {thresh})",
                 attr.value.unwrap_or(0)
             ),
             None,
@@ -303,7 +303,7 @@ fn push_findings(attr: &AtaAttribute, result: &AtaAttributeStatus, findings: &mu
             Source::Manufacturer,
             Status::Warning,
             format!(
-                "seuil constructeur franchi par le passé (pire valeur {}, seuil {thresh})",
+                "manufacturer threshold failed in the past (worst value {}, threshold {thresh})",
                 attr.worst.unwrap_or(0)
             ),
             None,
@@ -318,17 +318,17 @@ fn push_findings(attr: &AtaAttribute, result: &AtaAttributeStatus, findings: &mu
         return;
     }
     let mut message = match (metadata.critical, status) {
-        (true, _) => "risque de panne élevé pour un attribut critique (seuil 10 %)",
-        (false, Status::Fail) => "risque de panne élevé (seuil 20 %)",
-        (false, _) => "risque de panne accru (seuil 10 %)",
+        (true, _) => "high failure risk on a critical attribute (threshold 10%)",
+        (false, Status::Fail) => "high failure risk (threshold 20%)",
+        (false, _) => "elevated failure risk (threshold 10%)",
     }
     .to_string();
     match metadata.display_type {
         DisplayType::Normalized => {
-            message.push_str(&format!(", valeur normalisée {}", attr.value.unwrap_or(0)))
+            message.push_str(&format!(", normalized value {}", attr.value.unwrap_or(0)))
         }
         DisplayType::Transformed => message.push_str(&format!(
-            ", valeur interprétée {}",
+            ", decoded value {}",
             result.transformed_value
         )),
         DisplayType::Raw | DisplayType::Unspecified => {}
@@ -819,7 +819,7 @@ mod tests {
         assert_eq!(findings[0].name, "Reallocated Sectors Count");
         assert_eq!(findings[0].raw_value, Some(2000));
         assert_eq!(findings[0].annual_failure_rate, None);
-        assert!(findings[1].message.contains("pire valeur 37, seuil 40"));
+        assert!(findings[1].message.contains("worst value 37, threshold 40"));
         assert_close(findings[2].annual_failure_rate, 0.6823772508117681);
         assert!(findings[3].message.ends_with(CUMULATIVE_HINT));
         assert!(super::super::is_cumulative_counter(&findings[3]));

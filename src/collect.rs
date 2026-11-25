@@ -46,33 +46,43 @@ impl Smartctl {
     fn run(&self, args: &[&str]) -> Result<(i32, Vec<u8>)> {
         let out = Command::new(&self.bin).args(args).output().with_context(|| {
             format!(
-                "impossible de lancer `{}` : smartmontools est-il installé et dans le PATH ?",
+                "cannot run `{}`: is smartmontools installed and on the PATH?",
                 self.bin
             )
         })?;
         Ok((out.status.code().unwrap_or(-1), out.stdout))
     }
 
-    /// `--scan-open` (rather than `--scan`) opens each device so the reported
-    /// type is the real one: plain `--scan` reports SATA disks behind libata
-    /// as "scsi", and passing `-d scsi` would hide their ATA attributes.
+    /// Plain `--scan` only lists device nodes; it does not open them, so it
+    /// cannot spin up a sleeping drive (`--scan-open` would). Its "scsi" type
+    /// for SATA disks behind libata is dropped in `parse_scan`, letting
+    /// smartctl's own autodetection pick SAT vs SCSI at read time.
     pub fn scan(&self) -> Result<Vec<ScannedDevice>> {
-        let (_, stdout) = self.run(&["--scan-open", "--json"])?;
+        let (_, stdout) = self.run(&["--scan", "--json"])?;
         parse_scan(&stdout)
     }
 
-    pub fn read_device(&self, dev: &ScannedDevice) -> Result<SmartctlOutput> {
+    /// Read one device. Unless `wake` is set, smartctl is given `-n standby`:
+    /// it checks the power mode first (CHECK POWER MODE does not spin up a
+    /// drive) and skips a drive in STANDBY or SLEEP instead of waking it.
+    pub fn read_device(&self, dev: &ScannedDevice, wake: bool) -> Result<ReadOutcome> {
         let mut args = vec!["-x", "--json"];
+        if !wake {
+            args.extend(["-n", "standby"]);
+        }
         if let Some(t) = dev.dev_type.as_deref() {
             args.extend(["-d", t]);
         }
         args.push(&dev.name);
         let (code, stdout) = self.run(&args)?;
+        if let Some(mode) = low_power_skip(&stdout) {
+            return Ok(ReadOutcome::Asleep { mode });
+        }
         if stdout.is_empty() {
-            bail!("{} : aucune sortie de smartctl (code {code})", dev.name);
+            bail!("{}: no output from smartctl (exit code {code})", dev.name);
         }
         let parsed: SmartctlOutput = serde_json::from_slice(&stdout)
-            .with_context(|| format!("{} : JSON smartctl illisible", dev.name))?;
+            .with_context(|| format!("{}: unreadable smartctl JSON", dev.name))?;
         if code >= 0 && code & EXIT_FATAL_MASK != 0 {
             let msg = parsed
                 .smartctl
@@ -81,26 +91,55 @@ impl Smartctl {
                 .and_then(|m| m.first())
                 .and_then(|m| m.string.clone())
                 .unwrap_or_default();
-            bail!("{} : smartctl a échoué (code {code}) {msg}", dev.name);
+            bail!("{}: smartctl failed (exit code {code}) {msg}", dev.name);
         }
-        Ok(parsed)
+        Ok(ReadOutcome::Data(Box::new(parsed)))
+    }
+}
+
+#[derive(Debug)]
+pub enum ReadOutcome {
+    Data(Box<SmartctlOutput>),
+    /// smartctl skipped the drive because of `-n standby`; `mode` is the power
+    /// mode it reported (e.g. "STANDBY", "SLEEP").
+    Asleep { mode: String },
+}
+
+/// Detect smartctl's low-power skip. Like the Scrutiny collector (fix #911) we
+/// match the message, not the exit status: the status is 2 by default (which
+/// collides with "device open failed") and N with `-n standby,N`. The message
+/// reads "Device is in STANDBY mode, exit(2)" in text output and appears in
+/// `smartctl.messages` in JSON output.
+pub fn low_power_skip(output: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(output);
+    let start = text.find("Device is in ")? + "Device is in ".len();
+    let rest = &text[start..];
+    let end = rest.find(' ')?;
+    let mode = &rest[..end];
+    let tail = &rest[end..];
+    if !mode.is_empty() && tail.starts_with(" mode, exit(") {
+        Some(mode.to_string())
+    } else {
+        None
     }
 }
 
 pub fn parse_scan(json: &[u8]) -> Result<Vec<ScannedDevice>> {
-    let scan: ScanOutput = serde_json::from_slice(json).context("sortie de `smartctl --scan` illisible")?;
+    let scan: ScanOutput = serde_json::from_slice(json).context("unreadable `smartctl --scan` output")?;
     Ok(scan
         .devices
         .into_iter()
         .map(|d| ScannedDevice {
             name: d.name,
-            dev_type: d.dev_type,
+            // `--scan` labels SATA disks behind libata "scsi"; forcing `-d scsi`
+            // would hide their ATA attributes. Let smartctl autodetect instead.
+            dev_type: d.dev_type.filter(|t| t != "scsi"),
         })
         .collect())
 }
 
 /// Load a saved `smartctl --json` output (for offline analysis and tests).
 pub fn load_file(path: &Path) -> Result<SmartctlOutput> {
-    let data = std::fs::read(path).with_context(|| format!("lecture de {}", path.display()))?;
-    serde_json::from_slice(&data).with_context(|| format!("{} : JSON smartctl illisible", path.display()))
+    let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_slice(&data).with_context(|| format!("{}: unreadable smartctl JSON", path.display()))
 }

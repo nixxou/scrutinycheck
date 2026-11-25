@@ -193,7 +193,7 @@ def main():
             files.append(os.path.join(FIXTURES, fx))
             names.append("fixture:" + fx)
 
-    print(f"{len(files)} cas ({len(probes)} valeurs sondées par attribut ATA)")
+    print(f"{len(files)} cases ({len(probes)} probe values per ATA attribute)")
     go = run_batches([args.oracle], files)
     rs = run_batches([args.rust, "--json"], files)
     assert len(go) == len(rs) == len(files)
@@ -229,9 +229,9 @@ def main():
         if g_fail != r_fail:
             mismatches.append((name, "device", g["device_status"], r["status"]))
 
-    print(f"désaccords : {len(mismatches)} / {len(files)}")
+    print(f"mismatches: {len(mismatches)} / {len(files)}")
     if per_attr:
-        print("attributs concernés :", dict(per_attr.most_common()))
+        print("attributes involved:", dict(per_attr.most_common()))
     for m in mismatches[: args.show]:
         print("  ", m)
     with open(os.path.join(args.work, "mismatches.json"), "w", encoding="utf-8") as f:

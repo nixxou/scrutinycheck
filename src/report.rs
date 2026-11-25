@@ -19,6 +19,21 @@ pub struct DeviceReport {
     pub evaluation: Evaluation,
 }
 
+/// A drive smartctl skipped because it is in a low-power mode (`-n standby`).
+#[derive(Debug, Serialize)]
+pub struct AsleepReport {
+    pub device: String,
+    /// Always "asleep", so JSON consumers can tell it from a status.
+    pub skipped: &'static str,
+    pub power_mode: String,
+}
+
+impl AsleepReport {
+    pub fn new(device: String, power_mode: String) -> Self {
+        Self { device, skipped: "asleep", power_mode }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ErrorReport {
     pub device: String,
@@ -55,14 +70,14 @@ impl DeviceReport {
 pub fn status_label(s: Status) -> &'static str {
     match s {
         Status::Pass => "OK",
-        Status::Unknown => "INCONNU",
-        Status::Warning => "ATTENTION",
-        Status::Fail => "DÉFAILLANT",
+        Status::Unknown => "UNKNOWN",
+        Status::Warning => "WARNING",
+        Status::Fail => "FAILED",
     }
 }
 
 fn human_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["o", "Ko", "Mo", "Go", "To"];
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = bytes as f64;
     let mut i = 0;
     while v >= 1000.0 && i < UNITS.len() - 1 {
@@ -84,7 +99,7 @@ pub fn render_text(r: &DeviceReport, verbose: bool) -> String {
     // say so on its line, the findings themselves are listed below.
     let alerts = r.evaluation.findings.len();
     let label = if r.evaluation.status == Status::Pass && alerts > 0 {
-        format!("OK ({alerts} alerte{})", if alerts > 1 { "s" } else { "" })
+        format!("OK ({alerts} alert{})", if alerts > 1 { "s" } else { "" })
     } else {
         status_label(r.evaluation.status).to_string()
     };
@@ -99,10 +114,10 @@ pub fn render_text(r: &DeviceReport, verbose: bool) -> String {
     if verbose {
         let mut meta = Vec::new();
         if let Some(s) = &r.serial {
-            meta.push(format!("série {s}"));
+            meta.push(format!("serial {s}"));
         }
         if let Some(h) = r.power_on_hours {
-            meta.push(format!("{h} h de fonctionnement"));
+            meta.push(format!("{h} power-on hours"));
         }
         if let Some(t) = r.temperature_c {
             meta.push(format!("{t} °C"));
@@ -112,13 +127,13 @@ pub fn render_text(r: &DeviceReport, verbose: bool) -> String {
         }
     }
     for f in &r.evaluation.findings {
-        let raw = f.raw_value.map(|v| format!(" brut={v}")).unwrap_or_default();
+        let raw = f.raw_value.map(|v| format!(" raw={v}")).unwrap_or_default();
         let afr = f
             .annual_failure_rate
-            .map(|a| format!(" (taux de panne annuel observé ≈ {:.1} %)", a * 100.0))
+            .map(|a| format!(" (observed annual failure rate ≈ {:.1}%)", a * 100.0))
             .unwrap_or_default();
         out.push_str(&format!(
-            "   └ [{}] {:>4} {}{raw} : {}{afr}\n",
+            "   └ [{}] {:>4} {}{raw}: {}{afr}\n",
             status_label(f.status),
             f.attribute,
             f.name,
@@ -128,6 +143,13 @@ pub fn render_text(r: &DeviceReport, verbose: bool) -> String {
     out
 }
 
+pub fn render_asleep_text(a: &AsleepReport) -> String {
+    format!(
+        "{:<14} {:<16} drive in {}: not read so it is not woken up (--wake to force)\n",
+        a.device, "ASLEEP", a.power_mode
+    )
+}
+
 pub fn render_error_text(e: &ErrorReport) -> String {
-    format!("{:<14} {:<16} {}\n", e.device, "ERREUR", e.error)
+    format!("{:<14} {:<16} {}\n", e.device, "ERROR", e.error)
 }
